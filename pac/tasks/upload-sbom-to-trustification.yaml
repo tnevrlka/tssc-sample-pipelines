@@ -58,6 +58,10 @@ spec:
     secret:
       secretName: $(params.TRUSTIFICATION_SECRET_NAME)
       optional: true
+  - name: shared-folder
+    emptyDir:
+      medium: Memory
+      sizeLimit: 50Mi
   stepTemplate:
     env:
     - name: SBOMS_DIR
@@ -163,6 +167,9 @@ spec:
 
   - name: upload-sboms
     image: quay.io/konflux-ci/appstudio-utils:48c311af02858e2422d6229600e9959e496ddef1@sha256:91ddd999271f65d8ec8487b10f3dd378f81aa894e11b9af4d10639fd52bba7e8
+    volumeMounts:
+      - name: shared-folder
+        mountPath: /steps-shared-folder
     script: |
       #!/usr/bin/env bash
       set -o errexit -o nounset -o pipefail
@@ -231,6 +238,13 @@ spec:
         # This sbom_id is the one created in the gather-sboms step - sha256:${checksum}
         sbom_id="$(basename -s .json "$sbom_path")"
         supported_version_of_sbom="${sbom_path}.supported_version"
+      
+        # Generate URL to the SBOM in TPA and write it to a JSON file to use for eyecatcher
+        tpa_sbom_url="$bombastic_api_url/api/v1/sbom?id=$sbom_id"
+        jq -n \
+          --arg tpa_sbom_url "$tpa_sbom_url" \
+          '{TPA_SBOM_URL: $tpa_sbom_url}' \
+          > /steps-shared-folder/tpa-sbom-url.json
 
         echo "Uploading SBOM to $bombastic_api_url (with id=$sbom_id)"
         # https://docs.trustification.dev/trustification/user/bombastic.html#publishing-an-sbom-doc
@@ -240,5 +254,15 @@ spec:
           -H "transfer-encoding: chunked" \
           -H "content-type: application/json" \
           --data "@$supported_version_of_sbom" \
-          "$bombastic_api_url/api/v1/sbom?id=$sbom_id"
+          "$tpa_sbom_url"
       done
+
+  - name: report
+    image: quay.io/konflux-ci/appstudio-utils:48c311af02858e2422d6229600e9959e496ddef1@sha256:91ddd999271f65d8ec8487b10f3dd378f81aa894e11b9af4d10639fd52bba7e8
+    volumeMounts:
+      - name: shared-folder
+        mountPath: /steps-shared-folder
+    script: |
+      echo "TPA_SBOM_URL_EYECATCHER_BEGIN"
+      cat /steps-shared-folder/tpa-sbom-url.json
+      echo "TPA_SBOM_URL_EYECATCHER_END"
